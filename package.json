@@ -1,0 +1,39 @@
+{
+  "name": "myid",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.2"
+  },
+  "scripts": {
+    "dev": "node scripts/dev.ts",
+    "start": "node src/server.ts",
+    "migrate": "node src/migrate.ts",
+    "test": "node scripts/test.ts",
+    "typecheck": "tsc -p .",
+    "audit": "npm audit --audit-level=low",
+    "check": "npm run typecheck && npm test && npm run audit && npm run secrets",
+    "secrets": "gitleaks dir . --config .gitleaks.toml --redact --no-banner"
+  },
+  "dependencies": {
+    "@simplewebauthn/browser": "14.0.0",
+    "@simplewebauthn/server": "14.0.3",
+    "connect-pg-simple": "10.0.0",
+    "express": "5.3.0",
+    "express-session": "1.19.0",
+    "pg": "8.23.1"
+  },
+  "devDependencies": {
+    "@types/connect-pg-simple": "7.0.3",
+    "@types/express": "5.0.6",
+    "@types/express-session": "1.19.0",
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "embedded-postgres": "18.4.0-beta.17",
+    "typescript": "7.0.2"
+  },
+  "allowScripts": {
+    "@embedded-postgres/darwin-arm64@18.4.0-beta.17": true
+  }
+}

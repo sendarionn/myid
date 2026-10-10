@@ -1,0 +1,57 @@
+:root {
+  --fg: #1f2328;
+  --muted: #59636e;
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --danger: #cf222e;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --bg: #0d1117;
+    --panel: #151b23;
+    --border: #3d444d;
+    --accent: #4493f8;
+    --danger: #f85149;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 15px/1.6 system-ui, -apple-system, "Hiragino Sans", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 700; color: var(--fg); text-decoration: none; }
+nav { display: flex; gap: 12px; align-items: center; }
+main { max-width: 860px; margin: 0 auto; padding: 16px; }
+h2 { font-size: 18px; margin: 24px 0 8px; }
+h3 { font-size: 15px; margin: 20px 0 6px; }
+section { border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; margin: 12px 0; background: var(--panel); }
+form, .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+input, select, button { font: inherit; padding: 6px 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg); color: var(--fg); }
+input[type="checkbox"] { padding: 0; }
+button { cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.danger { color: var(--danger); }
+a { color: var(--accent); }
+table { border-collapse: collapse; width: 100%; }
+th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.muted { color: var(--muted); }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; word-break: break-all; }
+#message { margin: 0; padding: 8px 16px; background: var(--panel); border-bottom: 1px solid var(--border); }
+#message.error { color: var(--danger); }
+.perms { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.perms label { white-space: nowrap; }

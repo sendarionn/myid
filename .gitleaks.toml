@@ -1,0 +1,6 @@
+[extend]
+useDefault = true
+
+# Git管理外の開発用ファイルと依存パッケージは対象外
+[[allowlists]]
+paths = ['''^\.local/''', '''^node_modules/''']

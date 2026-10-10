@@ -1,0 +1,57 @@
+# 未検証: この環境にDockerがないため、起動は確認していない
+# 秘密情報は .env（Git管理外）で渡す。.env.example を参照
+services:
+  db:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: myid
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      MYID_OWNER_PASSWORD: ${MYID_OWNER_PASSWORD:?}
+      MYID_APP_PASSWORD: ${MYID_APP_PASSWORD:?}
+      TZ: UTC
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./deploy/postgres-init:/docker-entrypoint-initdb.d:ro
+    # ポートは公開しない（内部ネットワークのみ）
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d myid"]
+      interval: 5s
+      retries: 10
+
+  migrate:
+    build: .
+    command: ["node", "src/migrate.ts"]
+    environment:
+      DATABASE_URL: postgres://myid_owner:${MYID_OWNER_PASSWORD}@db:5432/myid
+    networks: [backend]
+    depends_on:
+      db:
+        condition: service_healthy
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://myid_app:${MYID_APP_PASSWORD}@db:5432/myid
+      ORIGIN: ${ORIGIN:?}
+      RP_ID: ${RP_ID:-}
+      SESSION_SECRET: ${SESSION_SECRET:?}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      TRUST_PROXY: ${TRUST_PROXY:-true}
+      NODE_ENV: ${NODE_ENV:-production}
+    # 本番ではTLS終端するリバースプロキシからのみ到達させる
+    ports:
+      - "127.0.0.1:3000:3000"
+    networks: [backend, frontend]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+networks:
+  backend:
+    internal: true
+  frontend: {}
+
+volumes:
+  pgdata: {}
