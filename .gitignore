@@ -1,5 +1,25 @@
+# 依存パッケージ
 node_modules/
+
+# 開発用のローカルDB・秘密情報（.local/ には開発用DBのパスワードが保存される）
 .local/
 .env
 .env.*
 !.env.example
+
+# 秘密鍵・証明書
+*.pem
+*.key
+*.p12
+*.pfx
+
+# DBダンプ・バックアップ（migrations/*.sql は対象外）
+*.dump
+*.backup
+*.sqlite
+*.db
+
+# ログ・一時ファイル
+*.log
+coverage/
+.DS_Store

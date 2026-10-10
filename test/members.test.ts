@@ -184,6 +184,35 @@ describe('招待', () => {
   });
 });
 
+describe('他案件のIDを使った操作', () => {
+  test('他案件の参加関係IDは自分の案件のパスで承認できない', async () => {
+    const a = await user();
+    const b = await user();
+    const invitee = await user();
+    const aProject = await a.createProject();
+    const bProject = await b.createProject();
+    const inv = await b.post(`/api/projects/${bProject}/invitations`, {
+      role: 'other',
+      permissions: ['project.view'],
+      requiresApproval: true,
+    });
+    const acc = await invitee.post('/api/invitations/accept', { token: inv.body.token });
+    assert.equal((await a.post(`/api/projects/${aProject}/members/${acc.body.membershipId}/approve`)).status, 404);
+    assert.equal((await invitee.get(`/api/projects/${bProject}`)).status, 404);
+  });
+
+  test('他案件の招待IDは自分の案件のパスで取り消せない', async () => {
+    const a = await user();
+    const b = await user();
+    const invitee = await user();
+    const aProject = await a.createProject();
+    const bProject = await b.createProject();
+    const inv = await b.post(`/api/projects/${bProject}/invitations`, { role: 'other', permissions: ['project.view'] });
+    assert.equal((await a.delete(`/api/projects/${aProject}/invitations/${inv.body.id}`)).status, 404);
+    assert.equal((await invitee.post('/api/invitations/accept', { token: inv.body.token })).status, 201);
+  });
+});
+
 describe('参加者管理', () => {
   test('最後の管理者は自分の管理権限を外せず、退出もできない', async () => {
     const manager = await user();

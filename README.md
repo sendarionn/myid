@@ -174,6 +174,8 @@ npm run check       # 上記すべて
 
 - テストファイルごとにマイグレーション済みのテンプレートDBを複製するため、テスト同士は干渉しない
 - 既存のPostgreSQLを使う場合は `TEST_PG_ADMIN_URL`（DB作成権限のある接続先）を指定する
+- GitHub Actions（`.github/workflows/ci.yml`）でも、push・Pull Requestごとに型検査・テスト・依存関係監査・gitleaksを実行する
+  - CIではPostgreSQLのサービスコンテナを使い、`embedded-postgres` は使わない
 - WebAuthnはテスト用のソフトウェア認証器（`test/authenticator.ts`）で検証する
   - OS・ブラウザのPasskey UI、同期Passkey、実機の認証器の挙動はテストの対象外
   - 実機で確認すべき項目は [SECURITY.md](SECURITY.md) の「実機確認が必要な項目」
@@ -189,6 +191,9 @@ npm run check       # 上記すべて
 - 実在する顧客情報・契約情報をテストや動作確認に使わない
 - `.env`、`.local/` はGit管理外（`.local/` には開発用DBのパスワードが保存される）
 - 招待リンクには招待トークンが含まれるため、ログやチャットツールの公開チャンネルに貼らない
+- このリポジトリは公開されている
+  - 秘密情報・実データ・ログ・DBダンプをコミットしない
+  - コミットの作者名・メールアドレスも公開される
 - 脅威モデルと残存リスクは [SECURITY.md](SECURITY.md) を参照
 
 ## 今後の開発方針
@@ -201,6 +206,19 @@ npm run check       # 上記すべて
 - Phase 5: 案件イベントの集計・分析（個人情報の長期蓄積を前提にしない）
 
 設計上の方針は [ARCHITECTURE.md](ARCHITECTURE.md) の「将来の拡張方針」を参照
+
+## ライセンス
+
+未定（LICENSEファイルなし）
+
+- ライセンスが付くまでは、GitHub利用規約で認められる範囲（閲覧・フォーク）を除き、複製・改変・再配布は許諾されていない
+- 依存パッケージはMIT・Apache-2.0・BSD・ISC・0BSDで、いずれも再配布時は著作権表示とライセンス文の同梱が必要
+
+## 貢献・脆弱性の報告
+
+- 不具合・提案はIssueで受け付ける
+- 脆弱性はIssueに書かず、[SECURITY.md](SECURITY.md) の「脆弱性の報告」の手順で非公開に報告する
+- Pull Requestでは [AGENTS.md](AGENTS.md) の開発ルール（否定系テスト、ドキュメント・HISTORYの更新など）に従う
 
 ## 関連ドキュメント
 

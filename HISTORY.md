@@ -4,6 +4,69 @@ myidの変更内容と、その理由・設計判断・検証結果を記録す�
 新しい変更を上に追加する
 現在の仕様は [README.md](README.md) と各ドキュメント、そこに至る経緯はこのファイルで説明する
 
+## 2026-10-11 公開リポジトリ向けの監査と開発体制の整備
+
+### 変更内容
+
+- CIを追加（`.github/workflows/ci.yml`）
+  - `npm ci --ignore-scripts`、型検査、テスト、`npm audit`、gitleaks（全履歴）
+  - PostgreSQLはサービスコンテナを使い、`TEST_PG_ADMIN_URL` で接続する
+- Dependabotの設定を追加（`.github/dependabot.yml`、npm・GitHub Actions、週1回）
+- `.gitignore` に秘密鍵・証明書、DBダンプ、ログ、一時ファイルを追加
+- テストを2件追加（`test/members.test.ts`）
+  - 他案件の参加関係IDを自分の案件のパスで承認できないこと
+  - 他案件の招待IDを自分の案件のパスで取り消せないこと
+- SECURITY.mdに脆弱性の報告方法、対象範囲、公開リポジトリとしての対策を追加し、残存リスクを追記
+- READMEにライセンス（未定）、貢献・脆弱性報告、CIの説明を追加
+- AGENTS.mdを特定のAI製品に依存しない内容にし、公開リポジトリ前提のルールと開始時・開発時・終了時の手順を追加
+
+### 背景・理由
+
+- リポジトリがPublicであるため、秘密情報の混入防止と変更の検証を継続的に行う仕組みが必要
+- CIの方針
+  - Secretsを使わず `contents: read` のみにして、外部からのPull Requestでも秘密情報に触れられないようにした
+  - `pull_request_target` は使わない
+  - Actionsはタグではなくコミットに固定し、gitleaksはリリースのチェックサムを照合する（改ざんされたタグ・バイナリの実行を防ぐため）
+  - CIでは依存パッケージのインストールスクリプトを実行しない
+- 追加したテストについて
+  - 監査で防御を一時的に外して確認した際、承認APIと招待取消APIの案件範囲チェックを外してもテストが失敗しなかった
+  - 実装は正しく範囲を確認しており、テストの不足だった
+- LICENSEはライセンスの選択が所有者の判断事項のため追加していない（MITが候補）
+
+### 監査結果
+
+- 秘密情報
+  - gitleaksで作業ツリーと全履歴（2コミット）を検査し、検出なし
+  - 秘密鍵・接続文字列・個人の連絡先・ローカルパス・大きなバイナリの追跡もなし
+  - コミットの作者メールアドレス（個人のGmail）は履歴に含まれ公開されている（秘密情報ではない）
+- 実データ
+  - テスト・ドキュメントの案件名・製品コード・契約番号はすべてダミー
+- 依存関係
+  - `npm audit` で脆弱性0件、`npm ci --dry-run` でロックファイルとの整合を確認
+  - ライセンスはMIT・Apache-2.0・BSD-2/3-Clause・ISC・0BSDのみ
+  - `connect-pg-simple` は最終公開が2024-09で更新頻度が低い
+- 認証・認可
+  - 重大な既知の問題は見つからなかった
+  - 次の防御を一時的に外し、いずれも対応するテストが失敗することを確認
+    - User Verification、RP ID、Origin、セッションID再生成、CSRFのOrigin検査とトークン検査、重要操作の再認証、再認証時のCredential所有者照合、案件の参加者本人の判定、Passkey削除の所有者範囲、承認・招待取消の案件範囲（今回のテスト追加後）
+- GitHub（認証なしのAPIで確認）
+  - Public、ライセンス未設定、`main` のブランチ保護なし、Private Vulnerability Reportingは無効
+  - Secret scanning・Push protection・Dependabot alertsの状態は確認できなかった
+
+### 検証
+
+- `npm run check` が成功（型検査、テスト72件、`npm audit` 0件、gitleaks検出なし）
+- CIと同じ経路（`TEST_PG_ADMIN_URL` で外部PostgreSQLを指定）でテスト72件が成功（ローカルで再現）
+- 未確認
+  - GitHub Actions上でのCIの実行
+  - Dependabotの動作
+
+### 未解決事項
+
+- ライセンスの決定
+- GitHub側の設定（Private Vulnerability Reporting、Secret scanning、Push protection、Dependabot alerts、ブランチ保護）
+- 以前の記録にある未解決事項（レート制限、アカウント復旧など）は変わらない
+
 ## 2026-10-11 ドキュメント整備
 
 ### 変更内容

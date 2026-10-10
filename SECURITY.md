@@ -1,7 +1,34 @@
 # SECURITY
 
-このPoCは本番公開を想定していない
-本番公開前の要件は末尾の「本番公開前の要件」を参照
+## 脆弱性の報告
+
+- GitHubの非公開の脆弱性報告（Private Vulnerability Reporting）で報告する
+  - リポジトリの「Security」タブ →「Report a vulnerability」
+  - 現時点ではこの機能が無効のため、リポジトリ所有者が有効化するまで利用できない
+- 公開Issue・Pull Request・Discussionに脆弱性の詳細や再現手順を書かない
+- 報告に実在の秘密情報（Cookie・招待トークン・パスワードなど）や個人情報を含めない
+  - 再現に必要な場合はダミー値で示す
+- 対応期限は定めていない（個人開発のPoCのため）
+
+## 対象範囲
+
+- 開発段階はPoC（Phase 1）で、本番運用は想定していない
+  - 本番公開前の要件は末尾の「本番公開前の要件」を参照
+- リリース版はなく、`main` ブランチの最新コミットだけを対象とする
+- ソースコードは公開されている
+  - 安全性はコードの秘匿に依存させず、秘密情報は環境変数で渡す
+  - リポジトリに本番データ・秘密鍵・認証トークンを含めない
+
+## 公開リポジトリとしての対策
+
+| 対策 | 内容 |
+| --- | --- |
+| 秘密情報の除外 | `.env`・`.local/`・鍵・DBダンプ・ログを `.gitignore` で除外（除外設定だけに依存しない） |
+| 秘密情報の検出 | `npm run secrets`（作業ツリー）、CIで全履歴をgitleaksで検査 |
+| CI | `.github/workflows/ci.yml`: 型検査・テスト・依存関係監査・gitleaks |
+| CIの権限 | `contents: read` のみ、Secretsを使わない、`pull_request_target` を使わない、Actionsはコミットに固定 |
+| 依存関係の更新 | `.github/dependabot.yml`（npm・GitHub Actions、週1回） |
+| テストデータ | ダミーの案件名・製品コードのみ。実在の顧客・契約情報を使わない |
 
 ## 設計原則
 
@@ -129,6 +156,13 @@
 - Docker Compose構成は起動を確認していない
 - 依存関係
   - `@simplewebauthn/server` はNode 26でWeb Cryptoの実験的機能の警告を出す（動作には影響なし）
+  - `connect-pg-simple` は最終公開が2024-09で、更新頻度が低い
+  - Dockerイメージ（`node:24-alpine`、`postgres:18-alpine`）はダイジェストで固定していない
+- `Strict-Transport-Security` に `includeSubDomains` を付けている
+  - 同じドメインのサブドメインでhttpを使うサービスがある場合は影響する
+- 招待リンクを開いた時点では、参加先の案件名を表示しない
+  - 受諾前に案件情報を漏らさないための仕様だが、利用者は参加先を確認できない
+- GitHubの設定（Secret scanning、Push protection、Dependabot alerts、ブランチ保護）は、作業時に確認できていない
 
 ## 本番公開前の要件
 
@@ -140,6 +174,8 @@
 - 秘密情報の管理（シークレットマネージャー、ローテーション手順）
 - 監視とアラート（ただしトークン・Cookie・個人情報を記録しない）
 - 実機でのWebAuthn確認（下記）
+- CIの継続的な成功と、ブランチ保護による必須化
+- ライセンスの決定
 - 第三者によるセキュリティレビュー
 
 ## 実機確認が必要な項目
