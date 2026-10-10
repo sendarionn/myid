@@ -203,6 +203,69 @@ describe('他案件のIDを使った操作', () => {
 });
 
 describe('参加者管理', () => {
+  test('未設定の表示名は安定した仮表示になる', async () => {
+    const manager = await user();
+    const first = await user();
+    const second = await user();
+    const id = await manager.createProject();
+    await inviteAndJoin(manager, first, id);
+    await inviteAndJoin(manager, second, id);
+
+    const initial = await manager.get(`/api/projects/${id}/members`);
+    assert.deepEqual(initial.body.members.map((m: any) => m.displayName), ['参加者1', '参加者2', '参加者3']);
+    assert.deepEqual(Object.keys(initial.body.members[0]).sort(), ['displayName', 'hasDisplayName', 'id', 'isSelf', 'joinedAt', 'role']);
+
+    await env.db.query('UPDATE project_memberships SET created_at = now() - display_number * interval \'1 day\' WHERE project_id = $1', [id]);
+    const reordered = await manager.get(`/api/projects/${id}/members`);
+    assert.deepEqual(
+      Object.fromEntries(reordered.body.members.map((m: any) => [m.id, m.displayName])),
+      Object.fromEntries(initial.body.members.map((m: any) => [m.id, m.displayName])),
+    );
+  });
+
+  test('自分の表示名を案件ごとに変更でき、重複も許可する', async () => {
+    const manager = await user();
+    const member = await user();
+    const projectA = await manager.createProject('A');
+    const projectB = await manager.createProject('B');
+    await inviteAndJoin(manager, member, projectA);
+
+    assert.equal((await manager.patch(`/api/projects/${projectA}/membership`, { displayName: '  田中 taro  ' })).status, 204);
+    assert.equal((await member.patch(`/api/projects/${projectA}/membership`, { displayName: '田中 taro' })).status, 204);
+    const names = (await manager.get(`/api/projects/${projectA}/members`)).body.members.map((m: any) => m.displayName);
+    assert.deepEqual(names, ['田中 taro', '田中 taro']);
+    assert.equal((await manager.get(`/api/projects/${projectB}/members`)).body.members[0].displayName, '参加者1');
+
+    assert.equal((await manager.patch(`/api/projects/${projectA}/membership`, { displayName: '   ' })).status, 204);
+    assert.equal((await manager.get(`/api/projects/${projectA}/members`)).body.members[0].displayName, '参加者1');
+
+    assert.equal((await manager.patch(`/api/projects/${projectA}/membership`, { displayName: '<script>alert(1)</script>' })).status, 204);
+    assert.equal((await manager.get(`/api/projects/${projectA}/members`)).body.members[0].displayName, '<script>alert(1)</script>');
+  });
+
+  test('表示名の入力を検証する', async () => {
+    const a = await user();
+    const id = await a.createProject();
+    for (const displayName of ['x'.repeat(101), 'a\nb', 1, null]) {
+      assert.equal((await a.patch(`/api/projects/${id}/membership`, { displayName })).status, 400, JSON.stringify(displayName));
+    }
+    assert.equal((await a.get(`/api/projects/${id}/members`)).body.members[0].displayName, '参加者1');
+  });
+
+  test('他人や他案件の表示名は変更できず、表示名は認可に影響しない', async () => {
+    const manager = await user();
+    const member = await user();
+    const outsider = await user();
+    const id = await manager.createProject();
+    const { membershipId } = await inviteAndJoin(manager, member, id);
+
+    assert.equal((await manager.patch(`/api/projects/${id}/members/${membershipId}`, { displayName: '改ざん' })).status, 404);
+    assert.equal((await outsider.patch(`/api/projects/${id}/membership`, { displayName: '部外者' })).status, 404);
+    assert.equal((await member.patch(`/api/projects/${id}/membership`, { displayName: '管理者' })).status, 204);
+    assert.equal((await member.post(`/api/projects/${id}/invitations`)).status, 403);
+    assert.equal((await manager.delete(`/api/projects/${id}/members/${membershipId}`)).status, 204);
+  });
+
   test('最後の管理者は退出できない', async () => {
     const manager = await user();
     const member = await user();

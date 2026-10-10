@@ -260,11 +260,30 @@ async function renderProject(id) {
     );
   }
 
-  const memberRows = members.map((m) =>
-    h(
+  const memberRows = members.map((m) => {
+    const display = m.isSelf
+      ? h(
+          'form',
+          {
+            class: 'row',
+            onsubmit: (e) => {
+              e.preventDefault();
+              const displayName = new FormData(e.target).get('displayName');
+              run(async () => {
+                await api('PATCH', `/projects/${id}/membership`, { displayName });
+                await reload();
+              }, '表示名を変更しました');
+            },
+          },
+          h('input', { name: 'displayName', value: m.hasDisplayName ? m.displayName : '', maxlength: 100, placeholder: m.displayName }),
+          h('button', {}, '変更'),
+          h('span', { class: 'muted' }, '（自分）'),
+        )
+      : m.displayName;
+    return h(
       'tr',
       {},
-      h('td', { class: 'mono' }, m.id.slice(0, 8), m.isSelf ? h('span', { class: 'muted' }, '（自分）') : null),
+      h('td', {}, display),
       h('td', {}, label(ROLES, m.role)),
       h('td', {}, fmt(m.joinedAt)),
       h(
@@ -288,9 +307,16 @@ async function renderProject(id) {
             )
           : null,
       ),
+    );
+  });
+  parts.push(
+    h(
+      'section',
+      {},
+      h('h3', {}, '参加者'),
+      h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '表示名'), h('th', {}, '役割'), h('th', {}, '参加日時'), h('th', {}, '操作'))), h('tbody', {}, memberRows)),
     ),
   );
-  parts.push(h('section', {}, h('h3', {}, '参加者'), h('table', {}, h('tbody', {}, memberRows))));
 
   if (can('invitations.manage')) parts.push(await invitationsSection(id));
   main().replaceChildren(...parts);

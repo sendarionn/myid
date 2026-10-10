@@ -39,6 +39,14 @@ export function parseName(value: unknown): string {
   return name;
 }
 
+export function parseDisplayName(value: unknown): string | null {
+  if (typeof value !== 'string') throw badRequest();
+  const name = value.trim();
+  if (!name) return null;
+  if (name.length > 100 || /[\u0000-\u001f\u007f-\u009f]/u.test(name)) throw badRequest();
+  return name;
+}
+
 // 'share': 通常の読み書き
 // 'update': 案件行・参加関係の変更（参加者変更を案件単位で直列化する）
 export type LockMode = 'share' | 'update';

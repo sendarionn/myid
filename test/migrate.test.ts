@@ -126,7 +126,7 @@ test('003: 権限を役割に変換し、承認待ち・期限付きの参加と
   await c.query('COMMIT');
   await c.query("UPDATE project_memberships SET created_at = now() - interval '2 days', valid_until = now() - interval '1 day' WHERE id = $1", [temporary]);
 
-  assert.deepEqual(await migrate(url), ['003_simplify_mvp.sql']);
+  assert.deepEqual(await migrate(url, { until: '003_simplify_mvp.sql' }), ['003_simplify_mvp.sql']);
   const roles = await c.query('SELECT id, role FROM project_memberships ORDER BY created_at');
   const byId = Object.fromEntries(roles.rows.map((r) => [r.id, r.role]));
   assert.deepEqual(byId, { [owner]: 'manager', [subManager]: 'manager', [viewer]: 'member', [noView]: 'member' });
@@ -149,6 +149,47 @@ test('003: 権限を役割に変換し、承認待ち・期限付きの参加と
   await assert.rejects(
     c.query("UPDATE project_memberships SET role = 'member' WHERE project_id = $1", [projectId]),
     (err: any) => err.code === 'MI001',
+  );
+  await c.end();
+});
+
+test('004: 既存の参加関係に案件内で安定した表示番号を付与する', async () => {
+  const url = await freshDb();
+  await migrate(url, { until: '003_simplify_mvp.sql' });
+  const c = new pg.Client({ connectionString: url });
+  await c.connect();
+  const userIds = [];
+  for (let i = 0; i < 3; i++) {
+    userIds.push((await c.query('INSERT INTO auth_users (webauthn_user_handle) VALUES ($1) RETURNING id', [randomBytes(32)])).rows[0].id);
+  }
+  await c.query('BEGIN');
+  const projectId = (await c.query("INSERT INTO projects (name) VALUES ('表示名移行') RETURNING id")).rows[0].id;
+  for (let i = 0; i < userIds.length; i++) {
+    await c.query(
+      `INSERT INTO project_memberships (project_id, user_id, role, created_at)
+       VALUES ($1, $2, $3, now() + make_interval(secs => $4))`,
+      [projectId, userIds[i], i === 0 ? 'manager' : 'member', i],
+    );
+  }
+  await c.query('COMMIT');
+
+  assert.deepEqual(await migrate(url), ['004_project_member_display_names.sql']);
+  const members = await c.query(
+    'SELECT display_name, display_number FROM project_memberships WHERE project_id = $1 ORDER BY created_at',
+    [projectId],
+  );
+  assert.deepEqual(members.rows, [
+    { display_name: null, display_number: 1 },
+    { display_name: null, display_number: 2 },
+    { display_name: null, display_number: 3 },
+  ]);
+  const extraUser = (await c.query('INSERT INTO auth_users (webauthn_user_handle) VALUES ($1) RETURNING id', [randomBytes(32)])).rows[0].id;
+  await assert.rejects(
+    c.query(
+      "INSERT INTO project_memberships (project_id, user_id, role, display_number) VALUES ($1, $2, 'member', 2)",
+      [projectId, extraUser],
+    ),
+    (err: any) => err.code === '23505',
   );
   await c.end();
 });

@@ -142,7 +142,7 @@ describe('一般参加者', () => {
     const members = await member.get(`/api/projects/${id}/members`);
     assert.equal(members.status, 200);
     assert.equal(members.body.members.length, 3);
-    assert.deepEqual(Object.keys(members.body.members[0]).sort(), ['id', 'isSelf', 'joinedAt', 'role']);
+    assert.deepEqual(Object.keys(members.body.members[0]).sort(), ['displayName', 'hasDisplayName', 'id', 'isSelf', 'joinedAt', 'role']);
 
     const denied = [
       await member.patch(`/api/projects/${id}`, { name: '変更' }),

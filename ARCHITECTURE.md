@@ -85,6 +85,8 @@ erDiagram
     uuid project_id FK
     uuid user_id FK
     enum role "manager / member"
+    text display_name "任意・案件内表示用"
+    integer display_number "案件内で一意"
     timestamptz created_at
   }
   project_invitations {
@@ -117,6 +119,10 @@ erDiagram
 - 履歴の実行者・対象は参加関係IDで記録し、ユーザーIDを持たない
   - 参加関係IDは案件ごとに異なるため、履歴から案件をまたいで同一人物を結合できない
   - 参加関係の削除後は、履歴から個人へたどれない
+- 参加者の表示と内部識別を分離する
+  - `display_name` は案件ごとの任意値で、変更・重複を許可し、認証・認可には使わない
+  - 未設定時は作成時に固定する `display_number` から「参加者N」を作る
+  - 内部ユーザーIDとWebAuthn userHandleは参加者APIに返さない
 - JSONは `sessions.sess`（express-sessionの形式）だけで使う
   - 中身は `csrf`、`uid`、`authAt`、`reauthAt` の4項目
   - `user_id` を生成列として取り出し、外部キーにしている
@@ -132,6 +138,8 @@ erDiagram
 | ユーザー削除でセッションも消える | `sessions.user_id` の外部キー `ON DELETE CASCADE` |
 | 解除・退出した参加者が発行した未使用招待は無効になる | `project_memberships` のBEFORE DELETEトリガー |
 | 参加関係の役割は `manager` / `member` だけ | ENUM |
+| 仮表示番号は案件内で一意な正の整数 | UNIQUE制約・CHECK制約 |
+| 表示名は100文字以内で制御文字を含まない | CHECK制約 |
 | 招待の有効期限は最大7日 | CHECK制約 |
 | 状態と日時の対応（accepted ⇔ accepted_at など） | CHECK制約 |
 
@@ -210,6 +218,7 @@ flowchart TD
   - 画面は `GET /api/projects/:id` が返す `access.actions` で表示を切り替えるが、判定はAPIごとにサーバーで行う
 - ブラウザから受け取るのは案件ID・参加関係ID・招待IDだけで、ユーザーIDはセッションから取る
   - 参加関係ID・招待IDは、パスの案件に属するものだけを操作対象にする
+- `PATCH /api/projects/:projectId/membership` はセッションのユーザーに対応する参加関係の表示名だけを更新する
 - 存在しない案件・参加していない案件・不正な形式のIDは同じ404にする
 - 参加関係は毎リクエストDBで確認し、セッションに保存しない
   - 解除・退出は次のリクエストから反映される

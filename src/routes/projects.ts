@@ -3,7 +3,7 @@ import { type Request, Router } from 'express';
 import type { Config } from '../config.ts';
 import { type Db, withTransaction } from '../db.ts';
 import { conflict, forbidden, HttpError, isUuid, notFound } from '../http.ts';
-import { allowedActions, can, parseName, recordAudit, withProject } from '../projects.ts';
+import { allowedActions, can, parseDisplayName, parseName, recordAudit, withProject } from '../projects.ts';
 import { type AuthedRequest, requireAuth } from '../session.ts';
 
 const uid = (req: Request) => (req as AuthedRequest).userId;
@@ -44,7 +44,8 @@ export function projectsRouter(config: Config, db: Db): Router {
       const projectId = rows[0]!.id;
       // 案件作成者を初期管理者とする（PoC仕様）
       const m = await tx.query<{ id: string }>(
-        `INSERT INTO project_memberships (project_id, user_id, role) VALUES ($1, $2, 'manager') RETURNING id`,
+        `INSERT INTO project_memberships (project_id, user_id, role, display_number)
+         VALUES ($1, $2, 'manager', 1) RETURNING id`,
         [projectId, uid(req)],
       );
       const membershipId = m.rows[0]!.id;
@@ -88,13 +89,24 @@ export function projectsRouter(config: Config, db: Db): Router {
   r.get('/projects/:projectId/members', async (req, res) => {
     const rows = await withProject(db, req.params.projectId, uid(req), { action: 'members.view' }, async (tx, a) => {
       const result = await tx.query(
-        `SELECT id, role, created_at AS "joinedAt", id = $2 AS "isSelf"
-         FROM project_memberships WHERE project_id = $1 ORDER BY created_at`,
+        `SELECT id, role, created_at AS "joinedAt", id = $2 AS "isSelf",
+                COALESCE(display_name, '参加者' || display_number::text) AS "displayName",
+                display_name IS NOT NULL AS "hasDisplayName"
+         FROM project_memberships WHERE project_id = $1 ORDER BY created_at, id`,
         [a.projectId, a.membershipId],
       );
       return result.rows;
     });
     res.json({ members: rows });
+  });
+
+  // 表示名はセッションのユーザーに対応する参加関係だけを更新する
+  r.patch('/projects/:projectId/membership', async (req, res) => {
+    const displayName = parseDisplayName(body(req).displayName);
+    await withProject(db, req.params.projectId, uid(req), { action: 'project.view' }, async (tx, a) => {
+      await tx.query('UPDATE project_memberships SET display_name = $2 WHERE id = $1', [a.membershipId, displayName]);
+    });
+    res.status(204).end();
   });
 
   // 管理者による参加解除、または本人による退出
@@ -213,7 +225,10 @@ export function projectsRouter(config: Config, db: Db): Router {
       if (existing.rowCount) throw conflict('already_member');
       // 招待で参加した人は常に一般参加者
       const m = await tx.query<{ id: string }>(
-        `INSERT INTO project_memberships (project_id, user_id, role) VALUES ($1, $2, 'member') RETURNING id`,
+        `INSERT INTO project_memberships (project_id, user_id, role, display_number)
+         SELECT $1, $2, 'member', COALESCE(max(display_number), 0) + 1
+         FROM project_memberships WHERE project_id = $1
+         RETURNING id`,
         [projectId, userId],
       );
       const membershipId = m.rows[0]!.id;
