@@ -1,51 +1,36 @@
 import { type Db, type Tx, withTransaction } from './db.ts';
 import { badRequest, forbidden, isUuid, notFound } from './http.ts';
 
-export const PERMISSIONS = [
-  'project.view',
-  'project.edit',
-  'details.view',
-  'details.edit',
-  'contract.view',
-  'contract.edit',
-  'events.view',
-  'members.manage',
-] as const;
-export type Permission = (typeof PERMISSIONS)[number];
+// 参加関係の役割
+// 顧客は役割や権限を設定できず、案件作成者が manager、招待で参加した人が member になる
+export type Role = 'manager' | 'member';
 
-export const ROLES = ['customer', 'contractor', 'installer', 'maintainer', 'other'] as const;
-export const PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed', 'cancelled'] as const;
-export const WORK_TYPES = ['site_survey', 'installation', 'maintenance'] as const;
-export const BILLING_STATUSES = ['not_billed', 'billed', 'paid'] as const;
+// 案件に対する操作と、それを許可する役割（認可ポリシーはここだけで定義する）
+// 新しい案件データを追加するときは、ここに操作を追加して業務ルールに基づいて許可する
+const POLICY = {
+  'project.view': ['manager', 'member'],
+  'project.rename': ['manager'],
+  'members.view': ['manager', 'member'],
+  'members.remove': ['manager'],
+  'invitations.manage': ['manager'],
+  'audit.view': ['manager'],
+} as const satisfies Record<string, readonly Role[]>;
 
-// 編集権限は対応する閲覧権限を含む
-const IMPLIED: Partial<Record<Permission, Permission>> = {
-  'project.edit': 'project.view',
-  'details.edit': 'details.view',
-  'contract.edit': 'contract.view',
-};
+export type Action = keyof typeof POLICY;
+
+export function can(role: Role, action: Action): boolean {
+  return (POLICY[action] as readonly Role[]).includes(role);
+}
+
+export function allowedActions(role: Role): Action[] {
+  return (Object.keys(POLICY) as Action[]).filter((a) => can(role, a));
+}
 
 export type Access = {
   projectId: string;
   membershipId: string;
-  role: string;
-  permissions: Set<Permission>;
+  role: Role;
 };
-
-export function oneOf<T extends string>(values: readonly T[], value: unknown): T {
-  if (typeof value !== 'string' || !(values as readonly string[]).includes(value)) throw badRequest();
-  return value as T;
-}
-
-export function parsePermissions(value: unknown): Permission[] {
-  if (!Array.isArray(value) || value.length > PERMISSIONS.length) throw badRequest();
-  const set = new Set(value.map((v) => oneOf(PERMISSIONS, v)));
-  for (const p of [...set]) {
-    const implied = IMPLIED[p];
-    if (implied) set.add(implied);
-  }
-  return PERMISSIONS.filter((p) => set.has(p));
-}
 
 export function parseName(value: unknown): string {
   if (typeof value !== 'string') throw badRequest();
@@ -59,12 +44,12 @@ export function parseName(value: unknown): string {
 export type LockMode = 'share' | 'update';
 
 // 案件へのアクセスはすべてここを通す
-// 権限変更と同じトランザクション境界で判定するため、失効は次のリクエストから即時に反映される
+// 参加関係を毎リクエストDBで確認するため、参加解除は次のリクエストから即時に反映される
 export async function withProject<T>(
   db: Db,
   rawProjectId: unknown,
   userId: string,
-  opts: { permission?: Permission; lock?: LockMode },
+  opts: { action: Action; lock?: LockMode },
   fn: (tx: Tx, access: Access) => Promise<T>,
 ): Promise<T> {
   // 不正なID・存在しない案件・非参加者はすべて同じ404
@@ -74,36 +59,16 @@ export async function withProject<T>(
     const lock = opts.lock === 'update' ? 'FOR UPDATE' : 'FOR SHARE';
     const project = await tx.query(`SELECT 1 FROM projects WHERE id = $1 ${lock}`, [projectId]);
     if (!project.rowCount) throw notFound();
-    const { rows } = await tx.query<{ id: string; role: string; permissions: Permission[] }>(
-      `SELECT m.id, m.role,
-              coalesce(array_agg(p.permission::text) FILTER (WHERE p.permission IS NOT NULL), '{}') AS permissions
-       FROM project_memberships m
-       LEFT JOIN project_permissions p ON p.membership_id = m.id
-       WHERE m.project_id = $1 AND m.user_id = $2 AND m.status = 'active'
-         AND (m.valid_until IS NULL OR m.valid_until > now())
-       GROUP BY m.id`,
+    const { rows } = await tx.query<{ id: string; role: Role }>(
+      'SELECT id, role FROM project_memberships WHERE project_id = $1 AND user_id = $2',
       [projectId, userId],
     );
     const m = rows[0];
     if (!m) throw notFound();
-    const access: Access = { projectId, membershipId: m.id, role: m.role, permissions: new Set(m.permissions) };
-    if (opts.permission && !access.permissions.has(opts.permission)) throw forbidden();
+    const access: Access = { projectId, membershipId: m.id, role: m.role };
+    if (!can(access.role, opts.action)) throw forbidden();
     return fn(tx, access);
   });
-}
-
-export async function recordEvent(
-  tx: Tx,
-  access: Access,
-  eventType: string,
-  statusFrom: string | null = null,
-  statusTo: string | null = null,
-): Promise<void> {
-  await tx.query(
-    `INSERT INTO project_events (project_id, event_type, actor_membership_id, status_from, status_to)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [access.projectId, eventType, access.membershipId, statusFrom, statusTo],
-  );
 }
 
 export async function recordAudit(
@@ -114,31 +79,20 @@ export async function recordAudit(
     actorMembershipId?: string | null;
     targetMembershipId?: string | null;
     invitationId?: string | null;
-    role?: string | null;
-    permissions?: Permission[] | null;
+    memberRole?: Role | null;
   },
 ): Promise<void> {
   await tx.query(
     `INSERT INTO project_audit_log
-       (project_id, action, actor_membership_id, target_membership_id, invitation_id, role, permissions)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::project_permission[])`,
+       (project_id, action, actor_membership_id, target_membership_id, invitation_id, member_role)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
     [
       projectId,
       action,
       fields.actorMembershipId ?? null,
       fields.targetMembershipId ?? null,
       fields.invitationId ?? null,
-      fields.role ?? null,
-      fields.permissions ?? null,
+      fields.memberRole ?? null,
     ],
-  );
-}
-
-export async function grantPermissions(tx: Tx, membershipId: string, permissions: Permission[]): Promise<void> {
-  if (!permissions.length) return;
-  await tx.query(
-    `INSERT INTO project_permissions (membership_id, permission)
-     SELECT $1, unnest($2::project_permission[])`,
-    [membershipId, permissions],
   );
 }

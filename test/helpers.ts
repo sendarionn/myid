@@ -162,12 +162,15 @@ export async function inviteAndJoin(
   manager: Client,
   invitee: Client,
   projectId: string,
-  permissions: string[],
-  extra: Record<string, unknown> = {},
 ): Promise<{ membershipId: string; invitationId: string }> {
-  const inv = await manager.post(`/api/projects/${projectId}/invitations`, { role: 'installer', permissions, ...extra });
+  const inv = await manager.post(`/api/projects/${projectId}/invitations`);
   if (inv.status !== 201) throw new Error(`invite ${inv.status}`);
   const acc = await invitee.post('/api/invitations/accept', { token: inv.body.token });
   if (acc.status !== 201) throw new Error(`accept ${acc.status}`);
   return { membershipId: acc.body.membershipId, invitationId: inv.body.id };
+}
+
+// 移行前のデータなど、APIでは作れない管理者を用意する
+export async function promoteToManager(env: TestEnv, membershipId: string): Promise<void> {
+  await env.db.query("UPDATE project_memberships SET role = 'manager' WHERE id = $1", [membershipId]);
 }

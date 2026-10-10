@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { after, before, describe, test } from 'node:test';
-import { type Client, inviteAndJoin, setupEnv, type TestEnv } from './helpers.ts';
+import { type Client, inviteAndJoin, promoteToManager, setupEnv, type TestEnv } from './helpers.ts';
 
 let env: TestEnv;
 before(async () => {
@@ -15,8 +15,6 @@ async function user(): Promise<Client> {
   await c.register();
   return c;
 }
-
-const ALL = ['project.view', 'project.edit', 'details.view', 'details.edit', 'contract.view', 'contract.edit', 'events.view', 'members.manage'];
 
 async function userIdOf(c: Client): Promise<string> {
   const cred = c.authenticator.credentials[0]!;
@@ -85,13 +83,11 @@ describe('アカウント削除', () => {
     const owner = await user();
     const member = await user();
     const id = await owner.createProject('共有案件');
-    await owner.post(`/api/projects/${id}/products`, { productCode: 'P-1', quantity: 1 });
-    const { membershipId } = await inviteAndJoin(owner, member, id, ['project.view', 'details.view']);
+    const { membershipId } = await inviteAndJoin(owner, member, id);
     const plan = await member.get('/api/account/deletion-plan');
     assert.deepEqual(plan.body.projectsToLeave, [id]);
     assert.equal((await member.delete('/api/account', { confirm: true })).status, 204);
-    assert.equal((await owner.get(`/api/projects/${id}`)).body.project.name, '共有案件');
-    assert.equal((await owner.get(`/api/projects/${id}/products`)).body.products.length, 1);
+    assert.equal((await owner.get(`/api/projects/${id}`)).body.name, '共有案件');
     const members = (await owner.get(`/api/projects/${id}/members`)).body.members;
     assert.equal(members.length, 1);
     const audit = (await owner.get(`/api/projects/${id}/audit`)).body.audit;
@@ -101,43 +97,28 @@ describe('アカウント削除', () => {
   test('他の参加者がいる案件の唯一の管理者は削除できない', async () => {
     const owner = await user();
     const member = await user();
-    const id = await owner.createProject('引き継ぎ待ち');
-    const { membershipId } = await inviteAndJoin(owner, member, id, ['project.view']);
+    const id = await owner.createProject('共有中');
+    const { membershipId } = await inviteAndJoin(owner, member, id);
     const plan = await owner.get('/api/account/deletion-plan');
     assert.deepEqual(plan.body.blockingProjectIds, [id]);
     const res = await owner.delete('/api/account', { confirm: true });
     assert.equal(res.status, 409);
     assert.equal(res.body.error, 'sole_manager_of_shared_project');
     assert.equal((await owner.get(`/api/projects/${id}`)).status, 200);
-    // 管理権限を移譲すれば削除できる
-    await owner.patch(`/api/projects/${id}/members/${membershipId}`, { permissions: ALL });
+    // 他の参加者を解除すれば、自分だけの案件として一緒に削除される
+    assert.equal((await owner.delete(`/api/projects/${id}/members/${membershipId}`)).status, 204);
+    assert.deepEqual((await owner.get('/api/account/deletion-plan')).body.projectsToDelete, [id]);
     assert.equal((await owner.delete('/api/account', { confirm: true })).status, 204);
-    assert.equal((await member.get(`/api/projects/${id}/members`)).body.members.length, 1);
+    assert.equal((await env.db.query('SELECT 1 FROM projects WHERE id = $1', [id])).rowCount, 0);
   });
 
   test('管理者が複数いる案件では削除後も残りの管理者が管理できる', async () => {
     const a = await user();
     const b = await user();
     const id = await a.createProject();
-    await inviteAndJoin(a, b, id, ALL);
+    const { membershipId } = await inviteAndJoin(a, b, id);
+    await promoteToManager(env, membershipId);
     assert.equal((await a.delete('/api/account', { confirm: true })).status, 204);
-    assert.equal((await b.get(`/api/projects/${id}/members`)).status, 200);
-  });
-
-  test('DB制約: 管理者が0人になる変更はアプリを経由しなくても拒否される', async () => {
-    const a = await user();
-    const id = await a.createProject();
-    await assert.rejects(
-      env.db.query(
-        `DELETE FROM project_permissions WHERE permission = 'members.manage'
-         AND membership_id IN (SELECT id FROM project_memberships WHERE project_id = $1)`,
-        [id],
-      ),
-      (err: any) => err.code === 'MI001',
-    );
-    await assert.rejects(
-      env.db.query("INSERT INTO projects (name) VALUES ('管理者なし')"),
-      (err: any) => err.code === 'MI001',
-    );
+    assert.equal((await b.get(`/api/projects/${id}/invitations`)).status, 200);
   });
 });

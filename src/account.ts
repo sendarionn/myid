@@ -21,15 +21,12 @@ async function buildPlan(q: Db | Tx, userId: string, lock: boolean): Promise<Del
   }>(
     `SELECT m.project_id,
             m.id AS membership_id,
-            (m.status = 'active' AND m.valid_until IS NULL AND EXISTS (
-              SELECT 1 FROM project_permissions p WHERE p.membership_id = m.id AND p.permission = 'members.manage'
-            )) AS is_manager,
+            m.role = 'manager' AS is_manager,
             (SELECT count(*)::int FROM project_memberships o
-               JOIN project_permissions op ON op.membership_id = o.id AND op.permission = 'members.manage'
-             WHERE o.project_id = m.project_id AND o.id <> m.id AND o.status = 'active' AND o.valid_until IS NULL
+             WHERE o.project_id = m.project_id AND o.id <> m.id AND o.role = 'manager'
             ) AS other_managers,
             (SELECT count(*)::int FROM project_memberships o
-             WHERE o.project_id = m.project_id AND o.id <> m.id AND o.status = 'active'
+             WHERE o.project_id = m.project_id AND o.id <> m.id
             ) AS other_active_members
      FROM project_memberships m
      WHERE m.user_id = $1

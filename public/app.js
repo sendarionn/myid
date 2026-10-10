@@ -1,47 +1,17 @@
 import { browserSupportsWebAuthn, startAuthentication, startRegistration } from '/vendor/simplewebauthn/index.js';
 
-const PERMISSIONS = [
-  ['project.view', '基本情報 閲覧'],
-  ['project.edit', '基本情報 編集'],
-  ['details.view', '製品・作業予定 閲覧'],
-  ['details.edit', '製品・作業予定 編集'],
-  ['contract.view', '契約 閲覧'],
-  ['contract.edit', '契約 編集'],
-  ['events.view', 'イベント 閲覧'],
-  ['members.manage', '参加者管理'],
-];
 const ROLES = [
-  ['customer', '顧客'],
-  ['contractor', '契約担当'],
-  ['installer', '施工担当'],
-  ['maintainer', '保守担当'],
-  ['other', 'その他'],
-];
-const STATUSES = [
-  ['planning', '計画中'],
-  ['active', '進行中'],
-  ['on_hold', '保留'],
-  ['completed', '完了'],
-  ['cancelled', '中止'],
-];
-const WORK_TYPES = [
-  ['site_survey', '現地調査'],
-  ['installation', '施工'],
-  ['maintenance', '保守'],
-];
-const BILLING = [
-  ['not_billed', '未請求'],
-  ['billed', '請求済み'],
-  ['paid', '入金済み'],
+  ['manager', '管理者'],
+  ['member', '参加者'],
 ];
 const ERRORS = {
   verification_failed: 'Passkeyの検証に失敗しました',
   credential_already_registered: 'このPasskeyは登録済みです',
   last_passkey: '最後のPasskeyは削除できません',
-  last_manager: '管理者が0人になる変更はできません',
+  last_manager: '最後の管理者は退出できません',
   invitation_invalid: '招待が無効か期限切れです',
   already_member: '既にこの案件に参加しています',
-  sole_manager_of_shared_project: '他の参加者がいる案件の唯一の管理者です。先に管理権限を移譲してください',
+  sole_manager_of_shared_project: '他の参加者がいる案件の唯一の管理者です。他の参加者を解除するまで削除できません',
   forbidden: '権限がありません',
   not_found: '見つかりません',
   invalid_request: '入力内容が正しくありません',
@@ -72,17 +42,6 @@ function h(tag, attrs = {}, ...children) {
   return el;
 }
 
-const select = (name, options, value) =>
-  h('select', { name }, options.map(([v, l]) => h('option', { value: v, selected: v === value }, l)));
-
-const permissionBoxes = (checked = []) =>
-  h(
-    'div',
-    { class: 'perms' },
-    PERMISSIONS.map(([p, l]) => h('label', {}, h('input', { type: 'checkbox', name: 'perm', value: p, checked: checked.includes(p) }), ' ', l)),
-  );
-
-const checkedPermissions = (form) => [...form.querySelectorAll('input[name="perm"]:checked')].map((i) => i.value);
 const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : '');
 
 function notify(text, isError = false) {
@@ -238,8 +197,8 @@ function renderInvite() {
               run(async () => {
                 const res = await api('POST', '/invitations/accept', { token });
                 sessionStorage.removeItem(INVITE_KEY);
-                notify(res.membershipStatus === 'pending_approval' ? '参加を申請しました。管理者の承認後に閲覧できます' : '案件に参加しました');
-                location.hash = res.membershipStatus === 'active' ? `#/p/${res.projectId}` : '#/projects';
+                notify('案件に参加しました');
+                location.hash = `#/p/${res.projectId}`;
               }),
           },
           '受諾',
@@ -250,16 +209,10 @@ function renderInvite() {
   );
 }
 
-async function renderProjects(q = '') {
-  const data = await api('GET', `/projects${q ? `?q=${encodeURIComponent(q)}` : ''}`);
+async function renderProjects() {
+  const data = await api('GET', '/projects');
   const rows = data.projects.map((p) =>
-    h(
-      'tr',
-      {},
-      h('td', {}, p.membershipStatus === 'active' ? h('a', { href: `#/p/${p.id}` }, p.name ?? '（名前の閲覧権限なし）') : '承認待ち'),
-      h('td', {}, p.status ? label(STATUSES, p.status) : ''),
-      h('td', {}, label(ROLES, p.role)),
-    ),
+    h('tr', {}, h('td', {}, h('a', { href: `#/p/${p.id}` }, p.name)), h('td', {}, label(ROLES, p.role)), h('td', {}, fmt(p.createdAt))),
   );
   main().replaceChildren(
     h('h2', {}, '案件'),
@@ -278,294 +231,114 @@ async function renderProjects(q = '') {
       h('input', { name: 'name', required: true, maxlength: 100, placeholder: '案件名' }),
       h('button', { class: 'primary' }, '作成'),
     ),
-    h(
-      'form',
-      { onsubmit: (e) => { e.preventDefault(); run(() => renderProjects(new FormData(e.target).get('q'))); } },
-      h('input', { name: 'q', value: q, placeholder: '案件名で検索', type: 'search' }),
-      h('button', {}, '検索'),
-      h('span', { class: 'muted' }, `${data.total}件`),
-    ),
     rows.length
-      ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '案件名'), h('th', {}, '状態'), h('th', {}, '役割'))), h('tbody', {}, rows))
+      ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, '案件名'), h('th', {}, '立場'), h('th', {}, '作成日時'))), h('tbody', {}, rows))
       : h('p', { class: 'muted' }, '参加している案件はありません'),
   );
 }
 
 async function renderProject(id) {
-  const detail = await api('GET', `/projects/${id}`);
-  const can = (p) => detail.access.permissions.includes(p);
+  const [project, { members }] = await Promise.all([api('GET', `/projects/${id}`), api('GET', `/projects/${id}/members`)]);
+  const can = (action) => project.access.actions.includes(action);
   const reload = () => renderProject(id);
-  const parts = [];
+  const parts = [h('h2', {}, project.name), h('p', { class: 'muted' }, `立場: ${label(ROLES, project.access.role)} / 作成: ${fmt(project.createdAt)}`)];
 
-  parts.push(
-    h('h2', {}, detail.project?.name ?? '案件'),
-    h('p', { class: 'muted' }, `役割: ${label(ROLES, detail.access.role)} / 権限: ${detail.access.permissions.map((p) => label(PERMISSIONS, p)).join('、') || 'なし'}`),
-  );
-
-  if (detail.project) {
-    const basic = h('section', {}, h('h3', {}, '基本情報'), h('p', {}, `状態: ${label(STATUSES, detail.project.status)}`));
-    if (can('project.edit')) {
-      basic.append(
-        h(
-          'form',
-          {
-            onsubmit: (e) => {
-              e.preventDefault();
-              const f = new FormData(e.target);
-              run(async () => { await api('PATCH', `/projects/${id}`, { name: f.get('name'), status: f.get('status') }); await reload(); }, '更新しました');
-            },
-          },
-          h('input', { name: 'name', value: detail.project.name, required: true, maxlength: 100 }),
-          select('status', STATUSES, detail.project.status),
-          h('button', {}, '更新'),
-        ),
-      );
-    }
-    parts.push(basic);
-  }
-
-  if (can('details.view')) {
-    const [{ products }, { schedules }] = await Promise.all([
-      api('GET', `/projects/${id}/products`),
-      api('GET', `/projects/${id}/schedules`),
-    ]);
-    const sec = h(
-      'section',
-      {},
-      h('h3', {}, '製品'),
-      products.length ? h('ul', {}, products.map((p) => h('li', {}, `${p.productCode} × ${p.quantity}`))) : h('p', { class: 'muted' }, 'なし'),
-    );
-    if (can('details.edit')) {
-      sec.append(
-        h(
-          'form',
-          {
-            onsubmit: (e) => {
-              e.preventDefault();
-              const f = new FormData(e.target);
-              run(async () => { await api('POST', `/projects/${id}/products`, { productCode: f.get('productCode'), quantity: Number(f.get('quantity')) }); await reload(); });
-            },
-          },
-          h('input', { name: 'productCode', required: true, maxlength: 64, placeholder: '製品コード・型番' }),
-          h('input', { name: 'quantity', type: 'number', min: 1, max: 10000, value: 1, required: true }),
-          h('button', {}, '追加'),
-        ),
-      );
-    }
-    sec.append(
-      h('h3', {}, '作業予定'),
-      schedules.length ? h('ul', {}, schedules.map((s) => h('li', {}, `${s.scheduledOn} ${label(WORK_TYPES, s.workType)}`))) : h('p', { class: 'muted' }, 'なし'),
-    );
-    if (can('details.edit')) {
-      sec.append(
-        h(
-          'form',
-          {
-            onsubmit: (e) => {
-              e.preventDefault();
-              const f = new FormData(e.target);
-              run(async () => { await api('POST', `/projects/${id}/schedules`, { workType: f.get('workType'), scheduledOn: f.get('scheduledOn') }); await reload(); });
-            },
-          },
-          select('workType', WORK_TYPES, 'installation'),
-          h('input', { name: 'scheduledOn', type: 'date', required: true }),
-          h('button', {}, '追加'),
-        ),
-      );
-    }
-    parts.push(sec);
-  }
-
-  if (can('contract.view')) {
-    const { contract } = await api('GET', `/projects/${id}/contract`);
-    const sec = h(
-      'section',
-      {},
-      h('h3', {}, '契約（ダミー）'),
-      contract
-        ? h('p', {}, `${contract.contractReference} / ${Number(contract.amountJpy).toLocaleString()}円 / ${label(BILLING, contract.billingStatus)}`)
-        : h('p', { class: 'muted' }, '未登録'),
-    );
-    if (can('contract.edit')) {
-      sec.append(
-        h(
-          'form',
-          {
-            onsubmit: (e) => {
-              e.preventDefault();
-              const f = new FormData(e.target);
-              run(async () => {
-                await api('PUT', `/projects/${id}/contract`, { contractReference: f.get('ref'), amountJpy: Number(f.get('amount')), billingStatus: f.get('billing') });
-                await reload();
-              });
-            },
-          },
-          h('input', { name: 'ref', required: true, maxlength: 64, placeholder: '契約番号', value: contract?.contractReference ?? '' }),
-          h('input', { name: 'amount', type: 'number', min: 0, required: true, placeholder: '金額', value: contract?.amountJpy ?? '' }),
-          select('billing', BILLING, contract?.billingStatus ?? 'not_billed'),
-          h('button', {}, '保存'),
-        ),
-      );
-    }
-    parts.push(sec);
-  }
-
-  if (can('events.view')) {
-    const { events } = await api('GET', `/projects/${id}/events`);
+  if (can('project.rename')) {
     parts.push(
       h(
-        'section',
-        {},
-        h('h3', {}, 'イベント'),
-        h(
-          'table',
-          {},
-          h('tbody', {}, events.map((e) =>
-            h('tr', {}, h('td', {}, fmt(e.occurredAt)), h('td', {}, e.eventType), h('td', {}, e.statusTo ? `${label(STATUSES, e.statusFrom)} → ${label(STATUSES, e.statusTo)}` : '')),
-          )),
-        ),
+        'form',
+        {
+          onsubmit: (e) => {
+            e.preventDefault();
+            const name = new FormData(e.target).get('name');
+            run(async () => { await api('PATCH', `/projects/${id}`, { name }); await reload(); }, '案件名を変更しました');
+          },
+        },
+        h('input', { name: 'name', value: project.name, required: true, maxlength: 100 }),
+        h('button', {}, '案件名を変更'),
       ),
     );
   }
 
-  if (can('members.manage')) parts.push(await membersSection(id, reload));
-
-  parts.push(
+  const memberRows = members.map((m) =>
     h(
-      'section',
+      'tr',
       {},
-      h('h3', {}, '退出'),
+      h('td', { class: 'mono' }, m.id.slice(0, 8), m.isSelf ? h('span', { class: 'muted' }, '（自分）') : null),
+      h('td', {}, label(ROLES, m.role)),
+      h('td', {}, fmt(m.joinedAt)),
       h(
-        'button',
-        {
-          class: 'danger',
-          onclick: () => {
-            if (!confirm('この案件から退出しますか')) return;
-            run(async () => { await api('DELETE', `/projects/${id}/members/${detail.access.membershipId}`); location.hash = '#/projects'; }, '退出しました');
-          },
-        },
-        'この案件から退出',
+        'td',
+        {},
+        m.isSelf || can('members.remove')
+          ? h(
+              'button',
+              {
+                class: 'danger',
+                onclick: () => {
+                  if (!confirm(m.isSelf ? 'この案件から退出しますか' : 'この参加者を案件から解除しますか')) return;
+                  run(async () => {
+                    await api('DELETE', `/projects/${id}/members/${m.id}`);
+                    if (m.isSelf) location.hash = '#/projects';
+                    else await reload();
+                  });
+                },
+              },
+              m.isSelf ? '退出' : '解除',
+            )
+          : null,
       ),
     ),
   );
+  parts.push(h('section', {}, h('h3', {}, '参加者'), h('table', {}, h('tbody', {}, memberRows))));
+
+  if (can('invitations.manage')) parts.push(await invitationsSection(id));
   main().replaceChildren(...parts);
 }
 
-async function membersSection(id, reload) {
-  const [{ members }, { invitations }, { audit }] = await Promise.all([
-    api('GET', `/projects/${id}/members`),
-    api('GET', `/projects/${id}/invitations`),
-    api('GET', `/projects/${id}/audit`),
-  ]);
-  const shortId = (v) => (v ? v.slice(0, 8) : '');
-
-  const memberRows = members.map((m) => {
-    const form = h(
-      'form',
-      {
-        onsubmit: (e) => {
-          e.preventDefault();
-          const f = e.target;
-          run(async () => {
-            await api('PATCH', `/projects/${id}/members/${m.id}`, { role: new FormData(f).get('role'), permissions: checkedPermissions(f) });
-            await reload();
-          }, '更新しました');
-        },
-      },
-      select('role', ROLES, m.role),
-      permissionBoxes(m.permissions),
-      h('button', {}, '更新'),
-      m.status === 'pending_approval'
-        ? h('button', { type: 'button', class: 'primary', onclick: () => run(async () => { await api('POST', `/projects/${id}/members/${m.id}/approve`); await reload(); }) }, '承認')
-        : null,
-      h(
-        'button',
-        {
-          type: 'button',
-          class: 'danger',
-          onclick: () => {
-            if (!confirm(m.isSelf ? 'この案件から退出しますか' : 'この参加者の権限を失効しますか')) return;
-            run(async () => { await api('DELETE', `/projects/${id}/members/${m.id}`); if (m.isSelf) location.hash = '#/projects'; else await reload(); });
-          },
-        },
-        m.isSelf ? '退出' : '失効',
-      ),
-    );
-    return h(
-      'tr',
-      {},
-      h('td', { class: 'mono' }, shortId(m.id), m.isSelf ? h('div', { class: 'muted' }, '自分') : null),
-      h('td', {}, m.status === 'active' ? '有効' : '承認待ち', m.validUntil ? h('div', { class: 'muted' }, `${fmt(m.validUntil)}まで`) : null),
-      h('td', {}, form),
-    );
-  });
-
+async function invitationsSection(id) {
   const inviteResult = h('div');
-  const inviteForm = h(
-    'form',
-    {
-      onsubmit: (e) => {
-        e.preventDefault();
-        const f = e.target;
-        const fd = new FormData(f);
-        run(async () => {
-          const res = await api('POST', `/projects/${id}/invitations`, {
-            role: fd.get('role'),
-            permissions: checkedPermissions(f),
-            ttlHours: Number(fd.get('ttl')),
-            requiresApproval: fd.get('approval') === 'on',
-          });
-          // トークンはURLのフラグメントに入れ、サーバーのアクセスログやRefererに残らないようにする
-          const url = `${location.origin}/#invite=${res.token}`;
-          inviteResult.replaceChildren(
-            h('p', {}, '招待リンク（この画面でのみ表示されます）'),
-            h('div', { class: 'row' }, h('input', { class: 'mono', value: url, readonly: true, size: 60 }), h('button', { type: 'button', onclick: () => navigator.clipboard.writeText(url).then(() => notify('コピーしました')) }, 'コピー')),
-          );
-          await refreshInvitations();
-        });
-      },
-    },
-    select('role', ROLES, 'installer'),
-    permissionBoxes(['project.view']),
-    h('label', {}, '有効期限 ', h('select', { name: 'ttl' }, [1, 24, 72, 168].map((v) => h('option', { value: v, selected: v === 72 }, `${v}時間`)))),
-    h('label', {}, h('input', { type: 'checkbox', name: 'approval' }), ' 参加に承認を要求'),
-    h('button', { class: 'primary' }, '招待リンクを発行'),
-  );
-
-  const invitationsBody = h('tbody');
-  const fillInvitations = (list) =>
-    invitationsBody.replaceChildren(
-      ...list.map((i) =>
+  const list = h('tbody');
+  const refresh = async () => {
+    const { invitations } = await api('GET', `/projects/${id}/invitations`);
+    list.replaceChildren(
+      ...invitations.map((i) =>
         h(
           'tr',
           {},
-          h('td', {}, label(ROLES, i.role)),
           h('td', {}, { pending: '未使用', accepted: '使用済み', revoked: '取消', expired: '期限切れ' }[i.status] ?? i.status),
-          h('td', {}, fmt(i.expiresAt)),
-          h('td', {}, i.status === 'pending' ? h('button', { class: 'danger', onclick: () => run(async () => { await api('DELETE', `/projects/${id}/invitations/${i.id}`); await refreshInvitations(); }) }, '取消') : null),
+          h('td', {}, `${fmt(i.expiresAt)}まで`),
+          h('td', {}, i.status === 'pending' ? h('button', { class: 'danger', onclick: () => run(async () => { await api('DELETE', `/projects/${id}/invitations/${i.id}`); await refresh(); }) }, '取消') : null),
         ),
       ),
     );
-  const refreshInvitations = async () => fillInvitations((await api('GET', `/projects/${id}/invitations`)).invitations);
-  fillInvitations(invitations);
-
+  };
+  await refresh();
   return h(
     'section',
     {},
-    h('h3', {}, '参加者'),
-    h('table', {}, h('tbody', {}, memberRows)),
     h('h3', {}, '招待'),
-    inviteForm,
-    inviteResult,
-    h('table', {}, invitationsBody),
-    h('h3', {}, '変更履歴'),
+    h('p', { class: 'muted' }, '招待リンクは1人だけが使え、72時間で失効します。参加した人は参加者になります。'),
     h(
-      'table',
-      {},
-      h('tbody', {}, audit.map((a) =>
-        h('tr', {}, h('td', {}, fmt(a.occurredAt)), h('td', {}, a.action), h('td', { class: 'mono' }, `${shortId(a.actorMembershipId)} → ${shortId(a.targetMembershipId)}`), h('td', {}, (a.permissions ?? []).join(', '))),
-      )),
+      'button',
+      {
+        class: 'primary',
+        onclick: () =>
+          run(async () => {
+            const res = await api('POST', `/projects/${id}/invitations`);
+            // トークンはURLのフラグメントに入れ、サーバーのアクセスログやRefererに残らないようにする
+            const url = `${location.origin}/#invite=${res.token}`;
+            inviteResult.replaceChildren(
+              h('p', {}, '招待リンク（この画面でのみ表示されます）'),
+              h('div', { class: 'row' }, h('input', { class: 'mono', value: url, readonly: true, size: 60 }), h('button', { type: 'button', onclick: () => navigator.clipboard.writeText(url).then(() => notify('コピーしました')) }, 'コピー')),
+            );
+            await refresh();
+          }),
+      },
+      '招待リンクを発行',
     ),
+    inviteResult,
+    h('table', {}, list),
   );
 }
 
@@ -606,7 +379,7 @@ async function renderAccount() {
     }, 'Passkeyを追加'),
     h('h2', {}, 'アカウント削除'),
     plan.blockingProjectIds.length
-      ? h('p', { class: 'error' }, `他の参加者がいる案件の唯一の管理者です（${plan.blockingProjectIds.length}件）。管理権限を移譲するまで削除できません。`)
+      ? h('p', { class: 'error' }, `他の参加者がいる案件の唯一の管理者です（${plan.blockingProjectIds.length}件）。他の参加者を解除するまで削除できません。`)
       : null,
     h('p', {}, `削除される案件: ${plan.projectsToDelete.length}件（他に参加者がいない案件） / 退出する案件: ${plan.projectsToLeave.length}件`),
     h('button', {

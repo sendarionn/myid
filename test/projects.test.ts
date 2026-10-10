@@ -18,91 +18,53 @@ async function user(): Promise<Client> {
 }
 
 describe('案件', () => {
-  test('案件を作成すると作成者が全権限の管理者になる', async () => {
+  test('案件名だけで作成でき、作成者は管理者として閲覧できる', async () => {
     const a = await user();
     const id = await a.createProject('案件A');
     const res = await a.get(`/api/projects/${id}`);
     assert.equal(res.status, 200);
-    assert.equal(res.body.project.name, '案件A');
-    assert.equal(res.body.project.status, 'planning');
-    assert.ok(res.body.access.permissions.includes('members.manage'));
+    assert.equal(res.body.name, '案件A');
+    assert.ok(res.body.createdAt && res.body.updatedAt);
+    assert.equal(res.body.access.role, 'manager');
+    assert.deepEqual(res.body.access.actions, [
+      'project.view',
+      'project.rename',
+      'members.view',
+      'members.remove',
+      'invitations.manage',
+      'audit.view',
+    ]);
     // ユーザーIDは返さない
     assert.equal(JSON.stringify(res.body).includes('userId'), false);
   });
 
-  test('不正な入力は拒否される', async () => {
+  test('不正な案件名は拒否される', async () => {
     const a = await user();
     assert.equal((await a.post('/api/projects', { name: '' })).status, 400);
+    assert.equal((await a.post('/api/projects', { name: '   ' })).status, 400);
     assert.equal((await a.post('/api/projects', { name: 'x'.repeat(101) })).status, 400);
     assert.equal((await a.post('/api/projects', { name: 1 })).status, 400);
-    const id = await a.createProject();
-    assert.equal((await a.patch(`/api/projects/${id}`, { status: 'unknown' })).status, 400);
-    for (const productCode of ['', '   ', 'x'.repeat(65), 'a\nb', 'tab\there', 'nul\u0000', 1, null]) {
-      const res = await a.post(`/api/projects/${id}/products`, { productCode, quantity: 1 });
-      assert.equal(res.status, 400, JSON.stringify(productCode));
-    }
-    for (const contractReference of ['', 'x'.repeat(65), 'a\rb']) {
-      const res = await a.put(`/api/projects/${id}/contract`, { contractReference, amountJpy: 1, billingStatus: 'paid' });
-      assert.equal(res.status, 400, JSON.stringify(contractReference));
-    }
-    assert.equal((await a.post(`/api/projects/${id}/schedules`, { workType: 'installation', scheduledOn: '2026-13-40' })).status, 400);
-    assert.equal((await a.get(`/api/projects/${id}/products`)).body.products.length, 0);
+    assert.equal((await a.get('/api/projects')).body.total, 0);
   });
 
-  test('製品コードと契約番号は入力した表記のまま保存・表示される', async () => {
+  test('案件名は入力した表記のまま保存される', async () => {
     const a = await user();
-    const id = await a.createProject();
-    const codes = [
-      'rl-lock-01',
-      'Mixed-Case_v2',
-      'RemoteLOCK 7j',
-      'スマートロック 本体',
-      'ＲＬ－０１（全角）',
-      'A/B #3 & <x> "q" \'s\'',
-      '<script>alert(1)</script>',
-      "x'; DROP TABLE project_products; --",
-      'é'.repeat(64),
-    ];
-    for (const productCode of codes) {
-      assert.equal((await a.post(`/api/projects/${id}/products`, { productCode, quantity: 1 })).status, 201, productCode);
-    }
-    const products = (await a.get(`/api/projects/${id}/products`)).body.products;
-    assert.deepEqual(products.map((p: any) => p.productCode), codes);
-    // 前後の空白だけは除く（案件名と同じ扱い）
-    await a.post(`/api/projects/${id}/products`, { productCode: '  trim me  ', quantity: 1 });
-    assert.equal((await a.get(`/api/projects/${id}/products`)).body.products.at(-1).productCode, 'trim me');
-
-    for (const contractReference of ['c-2026-001', '契約No.12 / 第2版', 'Ref<1>']) {
-      assert.equal((await a.put(`/api/projects/${id}/contract`, { contractReference, amountJpy: 1, billingStatus: 'paid' })).status, 204);
-      assert.equal((await a.get(`/api/projects/${id}/contract`)).body.contract.contractReference, contractReference);
+    for (const name of ['Mixed case 案件', '<script>alert(1)</script>', "x'; DROP TABLE projects; --"]) {
+      const id = await a.createProject(name);
+      assert.equal((await a.get(`/api/projects/${id}`)).body.name, name);
     }
   });
 
-  test('案件を編集でき、イベントが記録される', async () => {
+  test('管理者は案件名を変更でき、監査ログに記録される', async () => {
     const a = await user();
     const id = await a.createProject('旧名');
-    assert.equal((await a.patch(`/api/projects/${id}`, { name: '新名', status: 'active' })).status, 204);
-    assert.equal((await a.post(`/api/projects/${id}/products`, { productCode: 'RL-LOCK-01', quantity: 2 })).status, 201);
-    assert.equal(
-      (await a.post(`/api/projects/${id}/schedules`, { workType: 'installation', scheduledOn: '2026-11-01' })).status,
-      201,
-    );
-    assert.equal(
-      (await a.put(`/api/projects/${id}/contract`, { contractReference: 'C-0001', amountJpy: 120000, billingStatus: 'billed' })).status,
-      204,
-    );
-    const p = await a.get(`/api/projects/${id}`);
-    assert.equal(p.body.project.name, '新名');
-    assert.equal(p.body.project.status, 'active');
-    const events = await a.get(`/api/projects/${id}/events`);
+    assert.equal((await a.patch(`/api/projects/${id}`, { name: '新名' })).status, 204);
+    assert.equal((await a.get(`/api/projects/${id}`)).body.name, '新名');
+    const audit = await a.get(`/api/projects/${id}/audit`);
     assert.deepEqual(
-      events.body.events.map((e: any) => e.eventType),
-      ['project_created', 'project_renamed', 'status_changed', 'product_added', 'schedule_added', 'contract_updated'],
+      audit.body.audit.map((e: any) => e.action),
+      ['project_created', 'member_added', 'project_renamed'],
     );
-    const sc = events.body.events.find((e: any) => e.eventType === 'status_changed');
-    assert.equal(sc.statusFrom, 'planning');
-    assert.equal(sc.statusTo, 'active');
-    assert.equal((await a.get(`/api/projects/${id}/contract`)).body.contract.amountJpy, '120000');
   });
 
   test('案件一覧には自分が参加している案件だけが表示される', async () => {
@@ -113,14 +75,14 @@ describe('案件', () => {
     const list = await a.get('/api/projects');
     assert.deepEqual(list.body.projects.map((p: any) => p.id), [pa]);
     assert.equal(list.body.total, 1);
+    assert.equal(list.body.projects[0].role, 'manager');
   });
 
   test('他人の案件へのアクセスは存在しない案件と同じ404になる', async () => {
     const a = await user();
     const b = await user();
     const id = await a.createProject('秘密の案件');
-    const paths = ['', '/products', '/schedules', '/contract', '/events', '/members', '/invitations', '/audit'];
-    for (const suffix of paths) {
+    for (const suffix of ['', '/members', '/invitations', '/audit']) {
       const own = await b.get(`/api/projects/${id}${suffix}`);
       const missing = await b.get(`/api/projects/${randomUUID()}${suffix}`);
       const malformed = await b.get(`/api/projects/not-a-uuid${suffix}`);
@@ -129,24 +91,19 @@ describe('案件', () => {
       assert.deepEqual(own.body, malformed.body);
     }
     assert.equal((await b.patch(`/api/projects/${id}`, { name: '乗っ取り' })).status, 404);
-    assert.equal((await b.put(`/api/projects/${id}/contract`, { contractReference: 'X', amountJpy: 1, billingStatus: 'paid' })).status, 404);
-    assert.equal((await b.post(`/api/projects/${id}/invitations`, { role: 'other', permissions: ['members.manage'] })).status, 404);
-    assert.equal((await b.delete(`/api/projects/${id}/members/${randomUUID()}`)).status, 404);
-    assert.equal((await a.get(`/api/projects/${id}`)).body.project.name, '秘密の案件');
+    assert.equal((await b.post(`/api/projects/${id}/invitations`)).status, 404);
+    const aMembership = (await a.get(`/api/projects/${id}`)).body.access.membershipId;
+    assert.equal((await b.delete(`/api/projects/${id}/members/${aMembership}`)).status, 404);
+    assert.equal((await a.get(`/api/projects/${id}`)).body.name, '秘密の案件');
   });
 
-  test('案件IDを書き換えても自分の権限は他の案件に及ばない', async () => {
+  test('案件IDを書き換えても他の案件の参加者を操作できない', async () => {
     const a = await user();
     const b = await user();
     const aProject = await a.createProject('Aの案件');
     const bProject = await b.createProject('Bの案件');
-    // B の案件で取得した参加関係IDを A の案件のパスに使っても操作できない
-    const bMembers = await b.get(`/api/projects/${bProject}/members`);
-    const bMembershipId = bMembers.body.members[0].id;
-    assert.equal((await b.patch(`/api/projects/${aProject}/members/${bMembershipId}`, { permissions: ['members.manage'] })).status, 404);
-    assert.equal((await b.patch(`/api/projects/${bProject}/members/${bMembershipId}`, { role: 'other' })).status, 204);
-    // A の参加関係IDを B の案件のパスで操作しても見つからない
-    const aMembershipId = (await a.get(`/api/projects/${aProject}/members`)).body.members[0].id;
+    const aMembershipId = (await a.get(`/api/projects/${aProject}`)).body.access.membershipId;
+    // A の参加関係IDを B の案件のパスで解除しようとしても見つからない
     assert.equal((await b.delete(`/api/projects/${bProject}/members/${aMembershipId}`)).status, 404);
     assert.equal((await a.get(`/api/projects/${aProject}`)).status, 200);
   });
@@ -158,90 +115,65 @@ describe('案件', () => {
     assert.equal((await c.post('/api/projects', { name: 'x' })).status, 401);
   });
 
-  test('検索結果と件数に他人の案件や閲覧権限のない案件名は含まれない', async () => {
+  test('廃止した案件データのAPIは存在しない', async () => {
     const a = await user();
-    const b = await user();
-    await a.createProject('共通キーワード Aの案件');
-    const bProject = await b.createProject('共通キーワード Bの案件');
-    // A は B の案件に参加するが project.view を持たない
-    await inviteAndJoin(b, a, bProject, ['details.view']);
-    const search = await a.get(`/api/projects?q=${encodeURIComponent('Bの案件')}`);
-    assert.equal(search.body.total, 0);
-    const all = await a.get(`/api/projects?q=${encodeURIComponent('共通キーワード')}`);
-    assert.equal(all.body.total, 1);
-    // 一覧には参加中として表示されるが名前・状態は返さない
-    const list = await a.get('/api/projects');
-    const entry = list.body.projects.find((p: any) => p.id === bProject);
-    assert.equal(entry.name, null);
-    assert.equal(entry.status, null);
+    const id = await a.createProject();
+    for (const path of ['products', 'schedules', 'contract', 'events']) {
+      assert.equal((await a.get(`/api/projects/${id}/${path}`)).status, 404, path);
+    }
   });
 });
 
-describe('案件内の権限', () => {
-  test('権限が限定された参加者は許可された情報だけを閲覧・操作できる', async () => {
-    const manager = await user();
-    const installer = await user();
-    const id = await manager.createProject('施工案件');
-    await manager.put(`/api/projects/${id}/contract`, { contractReference: 'C-1', amountJpy: 500000, billingStatus: 'not_billed' });
-    await manager.post(`/api/projects/${id}/schedules`, { workType: 'installation', scheduledOn: '2026-12-01' });
-    await inviteAndJoin(manager, installer, id, ['project.view', 'details.view']);
-
-    const detail = await installer.get(`/api/projects/${id}`);
-    assert.equal(detail.status, 200);
-    assert.equal(detail.body.project.name, '施工案件');
-    assert.deepEqual(detail.body.access.permissions, ['project.view', 'details.view']);
-    assert.equal((await installer.get(`/api/projects/${id}/schedules`)).body.schedules.length, 1);
-
-    // 参加者であっても権限のない情報・操作は拒否される
-    assert.equal((await installer.get(`/api/projects/${id}/contract`)).status, 403);
-    assert.equal((await installer.get(`/api/projects/${id}/events`)).status, 403);
-    assert.equal((await installer.get(`/api/projects/${id}/members`)).status, 403);
-    assert.equal((await installer.get(`/api/projects/${id}/audit`)).status, 403);
-    assert.equal((await installer.patch(`/api/projects/${id}`, { status: 'completed' })).status, 403);
-    assert.equal((await installer.post(`/api/projects/${id}/schedules`, { workType: 'maintenance', scheduledOn: '2027-01-01' })).status, 403);
-    assert.equal((await installer.post(`/api/projects/${id}/invitations`, { role: 'other', permissions: [] })).status, 403);
-    // 403 の本文に権限のない情報は含まれない
-    const denied = await installer.get(`/api/projects/${id}/contract`);
-    assert.deepEqual(denied.body, { error: 'forbidden' });
-  });
-
-  test('編集権限を付与すると対応する閲覧権限も付与される', async () => {
+describe('一般参加者', () => {
+  test('案件と参加者一覧を閲覧でき、管理操作はAPIを直接呼んでも拒否される', async () => {
     const manager = await user();
     const member = await user();
-    const id = await manager.createProject();
-    await inviteAndJoin(manager, member, id, ['contract.edit']);
+    const other = await user();
+    const id = await manager.createProject('共有案件');
+    const { membershipId } = await inviteAndJoin(manager, member, id);
+    const { membershipId: otherId } = await inviteAndJoin(manager, other, id);
+    const managerMembershipId = (await manager.get(`/api/projects/${id}`)).body.access.membershipId;
+
     const detail = await member.get(`/api/projects/${id}`);
-    assert.deepEqual(detail.body.access.permissions, ['contract.view', 'contract.edit']);
-    assert.equal(detail.body.project, null);
+    assert.equal(detail.status, 200);
+    assert.equal(detail.body.name, '共有案件');
+    assert.equal(detail.body.access.role, 'member');
+    assert.deepEqual(detail.body.access.actions, ['project.view', 'members.view']);
+    const members = await member.get(`/api/projects/${id}/members`);
+    assert.equal(members.status, 200);
+    assert.equal(members.body.members.length, 3);
+    assert.deepEqual(Object.keys(members.body.members[0]).sort(), ['id', 'isSelf', 'joinedAt', 'role']);
+
+    const denied = [
+      await member.patch(`/api/projects/${id}`, { name: '変更' }),
+      await member.post(`/api/projects/${id}/invitations`),
+      await member.get(`/api/projects/${id}/invitations`),
+      await member.get(`/api/projects/${id}/audit`),
+      await member.delete(`/api/projects/${id}/members/${otherId}`),
+      await member.delete(`/api/projects/${id}/members/${managerMembershipId}`),
+    ];
+    for (const res of denied) {
+      assert.equal(res.status, 403);
+      assert.deepEqual(res.body, { error: 'forbidden' });
+    }
+    const inv = await manager.post(`/api/projects/${id}/invitations`);
+    assert.equal((await member.delete(`/api/projects/${id}/invitations/${inv.body.id}`)).status, 403);
+    assert.equal((await manager.get(`/api/projects/${id}`)).body.name, '共有案件');
+    assert.equal((await manager.get(`/api/projects/${id}/members`)).body.members.length, 3);
+    assert.ok(membershipId);
   });
 
-  test('権限変更は既存セッションに即時反映される', async () => {
+  test('参加者一覧はユーザーIDを含まない', async () => {
     const manager = await user();
     const member = await user();
     const id = await manager.createProject();
-    const { membershipId } = await inviteAndJoin(manager, member, id, ['project.view', 'contract.view']);
-    assert.equal((await member.get(`/api/projects/${id}/contract`)).status, 200);
-    assert.equal(
-      (await manager.patch(`/api/projects/${id}/members/${membershipId}`, { permissions: ['project.view'] })).status,
-      204,
-    );
-    assert.equal((await member.get(`/api/projects/${id}/contract`)).status, 403);
-    assert.equal((await member.get(`/api/projects/${id}`)).status, 200);
-  });
-
-  test('参加関係の有効期限を過ぎるとアクセスできない', async () => {
-    const manager = await user();
-    const member = await user();
-    const id = await manager.createProject();
-    const { membershipId } = await inviteAndJoin(manager, member, id, ['project.view']);
-    const until = new Date(Date.now() + 60_000).toISOString();
-    assert.equal((await manager.patch(`/api/projects/${id}/members/${membershipId}`, { validUntil: until })).status, 204);
-    assert.equal((await member.get(`/api/projects/${id}`)).status, 200);
-    await env.db.query(
-      "UPDATE project_memberships SET created_at = now() - interval '2 days', valid_until = now() - interval '1 second' WHERE id = $1",
-      [membershipId],
-    );
-    assert.equal((await member.get(`/api/projects/${id}`)).status, 404);
-    assert.equal((await member.get('/api/projects')).body.total, 0);
+    await inviteAndJoin(manager, member, id);
+    const userIds = (await env.db.query('SELECT id FROM auth_users')).rows.map((r) => r.id);
+    for (const c of [manager, member]) {
+      const body = JSON.stringify((await c.get(`/api/projects/${id}/members`)).body);
+      for (const u of userIds) assert.equal(body.includes(u), false);
+    }
+    const audit = JSON.stringify((await manager.get(`/api/projects/${id}/audit`)).body);
+    for (const u of userIds) assert.equal(audit.includes(u), false);
   });
 });
