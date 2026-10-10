@@ -37,8 +37,45 @@ describe('案件', () => {
     assert.equal((await a.post('/api/projects', { name: 1 })).status, 400);
     const id = await a.createProject();
     assert.equal((await a.patch(`/api/projects/${id}`, { status: 'unknown' })).status, 400);
-    assert.equal((await a.post(`/api/projects/${id}/products`, { productCode: 'lower', quantity: 1 })).status, 400);
+    for (const productCode of ['', '   ', 'x'.repeat(65), 'a\nb', 'tab\there', 'nul\u0000', 1, null]) {
+      const res = await a.post(`/api/projects/${id}/products`, { productCode, quantity: 1 });
+      assert.equal(res.status, 400, JSON.stringify(productCode));
+    }
+    for (const contractReference of ['', 'x'.repeat(65), 'a\rb']) {
+      const res = await a.put(`/api/projects/${id}/contract`, { contractReference, amountJpy: 1, billingStatus: 'paid' });
+      assert.equal(res.status, 400, JSON.stringify(contractReference));
+    }
     assert.equal((await a.post(`/api/projects/${id}/schedules`, { workType: 'installation', scheduledOn: '2026-13-40' })).status, 400);
+    assert.equal((await a.get(`/api/projects/${id}/products`)).body.products.length, 0);
+  });
+
+  test('製品コードと契約番号は入力した表記のまま保存・表示される', async () => {
+    const a = await user();
+    const id = await a.createProject();
+    const codes = [
+      'rl-lock-01',
+      'Mixed-Case_v2',
+      'RemoteLOCK 7j',
+      'スマートロック 本体',
+      'ＲＬ－０１（全角）',
+      'A/B #3 & <x> "q" \'s\'',
+      '<script>alert(1)</script>',
+      "x'; DROP TABLE project_products; --",
+      'é'.repeat(64),
+    ];
+    for (const productCode of codes) {
+      assert.equal((await a.post(`/api/projects/${id}/products`, { productCode, quantity: 1 })).status, 201, productCode);
+    }
+    const products = (await a.get(`/api/projects/${id}/products`)).body.products;
+    assert.deepEqual(products.map((p: any) => p.productCode), codes);
+    // 前後の空白だけは除く（案件名と同じ扱い）
+    await a.post(`/api/projects/${id}/products`, { productCode: '  trim me  ', quantity: 1 });
+    assert.equal((await a.get(`/api/projects/${id}/products`)).body.products.at(-1).productCode, 'trim me');
+
+    for (const contractReference of ['c-2026-001', '契約No.12 / 第2版', 'Ref<1>']) {
+      assert.equal((await a.put(`/api/projects/${id}/contract`, { contractReference, amountJpy: 1, billingStatus: 'paid' })).status, 204);
+      assert.equal((await a.get(`/api/projects/${id}/contract`)).body.contract.contractReference, contractReference);
+    }
   });
 
   test('案件を編集でき、イベントが記録される', async () => {

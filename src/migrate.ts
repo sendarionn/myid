@@ -8,7 +8,8 @@ const LOCK_KEY = 7_340_001;
 
 // migrations/NNN_*.sql を番号順に1ファイル1トランザクションで適用する
 // 適用済みファイルの内容が変わっていた場合は停止する
-export async function migrate(connectionString: string): Promise<string[]> {
+// until を指定すると、そのファイルまでで止める（旧スキーマからの移行を検証するため）
+export async function migrate(connectionString: string, opts: { until?: string } = {}): Promise<string[]> {
   const client = new pg.Client({ connectionString });
   await client.connect();
   const applied: string[] = [];
@@ -26,6 +27,7 @@ export async function migrate(connectionString: string): Promise<string[]> {
     const done = new Map(rows.map((r) => [r.version, r.checksum]));
     const files = (await readdir(MIGRATIONS_DIR)).filter((f) => /^\d{3}_[a-z0-9_]+\.sql$/.test(f)).sort();
     for (const file of files) {
+      if (opts.until && file > opts.until) break;
       const sql = await readFile(path.join(MIGRATIONS_DIR, file), 'utf8');
       const checksum = createHash('sha256').update(sql).digest('hex');
       const prev = done.get(file);

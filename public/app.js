@@ -346,7 +346,7 @@ async function renderProject(id) {
               run(async () => { await api('POST', `/projects/${id}/products`, { productCode: f.get('productCode'), quantity: Number(f.get('quantity')) }); await reload(); });
             },
           },
-          h('input', { name: 'productCode', required: true, pattern: '[A-Z0-9][A-Z0-9\\-]{0,31}', placeholder: '製品コード（例 RL-01）' }),
+          h('input', { name: 'productCode', required: true, maxlength: 64, placeholder: '製品コード・型番' }),
           h('input', { name: 'quantity', type: 'number', min: 1, max: 10000, value: 1, required: true }),
           h('button', {}, '追加'),
         ),
@@ -400,7 +400,7 @@ async function renderProject(id) {
               });
             },
           },
-          h('input', { name: 'ref', required: true, pattern: '[A-Z0-9][A-Z0-9\\-]{0,31}', placeholder: '契約番号', value: contract?.contractReference ?? '' }),
+          h('input', { name: 'ref', required: true, maxlength: 64, placeholder: '契約番号', value: contract?.contractReference ?? '' }),
           h('input', { name: 'amount', type: 'number', min: 0, required: true, placeholder: '金額', value: contract?.amountJpy ?? '' }),
           select('billing', BILLING, contract?.billingStatus ?? 'not_billed'),
           h('button', {}, '保存'),

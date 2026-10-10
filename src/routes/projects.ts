@@ -24,12 +24,17 @@ import { type AuthedRequest, requireAuth } from '../session.ts';
 const uid = (req: Request) => (req as AuthedRequest).userId;
 const body = (req: Request) => (req.body ?? {}) as Record<string, unknown>;
 
-const CODE_RE = /^[A-Z0-9][A-Z0-9-]{0,31}$/;
+const CONTROL_CHARS = /\p{Cc}/u;
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
-function parseCode(value: unknown): string {
-  if (typeof value !== 'string' || !CODE_RE.test(value)) throw badRequest();
-  return value;
+// 製品コード・契約番号など、利用者が入力する参照用の文字列
+// 大文字化などの変換はせず、前後の空白だけを除いて入力どおりに保存する
+function parseReference(value: unknown): string {
+  if (typeof value !== 'string') throw badRequest();
+  const text = value.trim();
+  const length = [...text].length;
+  if (length < 1 || length > 64 || CONTROL_CHARS.test(text)) throw badRequest();
+  return text;
 }
 
 function parseIntInRange(value: unknown, min: number, max: number): number {
@@ -182,7 +187,7 @@ export function projectsRouter(config: Config, db: Db): Router {
   });
 
   r.post('/projects/:projectId/products', async (req, res) => {
-    const productCode = parseCode(body(req).productCode);
+    const productCode = parseReference(body(req).productCode);
     const quantity = parseIntInRange(body(req).quantity, 1, 10000);
     await withProject(db, req.params.projectId, uid(req), { permission: 'details.edit' }, async (tx, a) => {
       await tx.query('INSERT INTO project_products (project_id, product_code, quantity) VALUES ($1, $2, $3)', [
@@ -237,7 +242,7 @@ export function projectsRouter(config: Config, db: Db): Router {
   });
 
   r.put('/projects/:projectId/contract', async (req, res) => {
-    const contractReference = parseCode(body(req).contractReference);
+    const contractReference = parseReference(body(req).contractReference);
     const amountJpy = parseIntInRange(body(req).amountJpy, 0, 1_000_000_000_000);
     const billingStatus = oneOf(BILLING_STATUSES, body(req).billingStatus);
     await withProject(db, req.params.projectId, uid(req), { permission: 'contract.edit' }, async (tx, a) => {
