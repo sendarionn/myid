@@ -1,23 +1,90 @@
 # myid
 
+My Identity Directory
+
 匿名Passkey認証と案件単位の権限管理を検証するPoC
 
-- メールアドレス・電話番号・氏名・所属組織を取得せずに登録できる
-- 案件ごとに参加者と権限を管理し、明示的に付与された権限だけで情報を開示する
-- 設計は [ARCHITECTURE.md](ARCHITECTURE.md)、脅威モデルと残存リスクは [SECURITY.md](SECURITY.md)、設計判断の経緯は [HISTORY.md](HISTORY.md)
+- 現在はPoC段階で、本番運用は想定していない
+- 本番公開前に必要な対策は [SECURITY.md](SECURITY.md) の「本番公開前の要件」を参照
 
-## 必要なもの
+## 概要と設計思想
+
+従来のCRMは氏名・メールアドレス・電話番号・所属企業などの顧客属性を中心に作られる
+myidは匿名の個人IDと案件IDを中心に設計し、必要な情報を必要な主体だけが持つ業務基盤を目指す
+
+- 取得しない
+  - 氏名・メールアドレス・電話番号・所属組織を登録に使わない
+  - IPアドレス・User-Agentも保存しない
+- 所属から推定しない
+  - 組織や従業員名簿を管理せず、案件への参加関係と明示的な権限だけを情報開示の根拠にする
+  - 案件の参加者と権限は、案件の管理者（顧客自身）が管理する
+- 結合させない
+  - 他の参加者や履歴にはユーザーIDを見せず、案件ごとに異なる参加関係IDだけを使う
+- 侵害を前提にする
+  - 整合性の規則をDBでも強制し、アプリ用DBロールはDMLに限定する
+
+## 現在実装されている機能
+
+- 匿名アカウント
+  - Passkeyだけで登録・ログイン・ログアウトできる
+  - 同一端末で複数のアカウントを作成し、OS・ブラウザの選択画面で切り替えられる
+  - Passkeyの追加・一覧・削除（最後の1件は削除不可）
+  - Passkey追加・削除とアカウント削除の前に、直近の再認証を要求する
+  - アカウント削除（共有案件は残る）
+- 案件
+  - 作成・編集・一覧・検索
+  - 作成者が初期管理者になる（PoC仕様）
+  - 案件情報は閲覧範囲ごとに分かれる
+    - 基本情報（案件名・状態）
+    - 製品・作業予定
+    - 契約（ダミー）
+    - イベント履歴
+- 招待と参加者管理
+  - 役割・権限・有効期限（最大7日）を指定した招待リンクの発行
+  - 招待の取消、一回限りの使用、承認制の招待
+  - 参加者の権限変更・承認・失効・退出
+  - 権限変更と招待の監査ログ
+- 確認用のWeb画面（ビルドなしのES Module）
+
+### 実装していないもの
+
+- アカウント復旧（すべてのPasskeyを失うと復旧できない）
+- 実際の契約・決済、配送・施工手配、顧客住所の管理
+- Chatwootなど外部サービスとの連携
+- レート制限、運営者権限、監視
+- 注文・契約に基づく案件管理者の正当性確認
+
+## 技術スタック
+
+| 用途 | 採用 |
+| --- | --- |
+| 実行環境 | Node.js 24.2以上（TypeScriptを型除去で直接実行、ビルドなし） |
+| Webフレームワーク | Express 5 |
+| WebAuthn | `@simplewebauthn/server` / `@simplewebauthn/browser` 14 |
+| セッション | `express-session` + `connect-pg-simple`（サーバー側セッション） |
+| DB | PostgreSQL（`pg`） |
+| テスト | `node:test`、テスト用ソフトウェア認証器 |
+| 開発・テスト用DB | `embedded-postgres` |
+| 型検査 | TypeScript（`tsc --noEmit`） |
+| 本番相当構成 | Dockerfile、Docker Compose（起動は未確認） |
+
+## 開発環境のセットアップ
 
 - Node.js 24.2以上（`.nvmrc` は24）
-  - TypeScriptはNode標準の型除去で直接実行するため、ビルドは不要
 - macOS（arm64）では追加のソフトウェアは不要
   - 開発・テスト用のPostgreSQLは `embedded-postgres` が起動する
   - 他のOSでは `embedded-postgres` の対応状況を確認するか、既存のPostgreSQLを使う
+- 秘密情報の検出（`npm run secrets`）には `gitleaks` が必要
+
+```sh
+npm ci
+```
+
+`embedded-postgres` のpostinstallスクリプト（symlinkの復元）は `package.json` の `allowScripts` で許可している
 
 ## 起動
 
 ```sh
-npm ci
 npm run dev
 ```
 
@@ -39,6 +106,7 @@ DATABASE_URL=postgres://... ORIGIN=http://localhost:3000 SESSION_SECRET=$(openss
 | `DATABASE_URL` | 接続先（必須） |
 | `ORIGIN` | ブラウザがアクセスするOrigin（必須）。WebAuthnのOrigin検証とCSRF検査に使う |
 | `RP_ID` | WebAuthnのRP ID。省略時は `ORIGIN` のホスト名 |
+| `RP_NAME` | WebAuthnのRP名。省略時は `myid` |
 | `SESSION_SECRET` | Cookie署名用の秘密（32文字以上、必須） |
 | `COOKIE_SECURE` | `true` でSecure属性と `__Host-` 接頭辞を付ける。https の `ORIGIN` では既定で `true` |
 | `TRUST_PROXY` | TLS終端するリバースプロキシの背後で `true` |
@@ -58,22 +126,7 @@ docker compose up --build
 - この構成はDockerのない環境で作成したため、`docker compose` での起動は未確認
   - ロール分離のSQLとアプリの動作は、ローカルのPostgreSQLで確認済み
 
-## テスト
-
-```sh
-npm test            # 一時PostgreSQLを起動して全テストを実行
-npm run typecheck   # 型検査
-npm run audit       # 依存関係の脆弱性監査
-npm run secrets     # gitleaksによる秘密情報の検出（gitleaksが必要）
-npm run check       # 上記すべて
-```
-
-- テストごとにマイグレーション済みのテンプレートDBを複製するため、テスト同士は干渉しない
-- 既存のPostgreSQLを使う場合は `TEST_PG_ADMIN_URL`（DB作成権限のある接続先）を指定する
-- WebAuthnはテスト用のソフトウェア認証器（`test/authenticator.ts`）で検証する
-  - OS・ブラウザのPasskey UI、同期Passkey、実機の認証器の挙動はテストの対象外
-
-## 操作手順
+## 操作方法
 
 ブラウザで `http://localhost:3000` を開く
 `localhost` はhttpでもWebAuthnを利用できる
@@ -109,4 +162,51 @@ npm run check       # 上記すべて
    - 他の参加者がいる案件の唯一の管理者である場合は、先に管理権限を移譲するまで削除できない
    - 自分しか参加していない案件はアカウントと一緒に削除され、共有案件は残る
 
-すべてのPasskeyを失うとアカウントは復旧できない
+## テスト
+
+```sh
+npm test            # 一時PostgreSQLを起動して全テストを実行
+npm run typecheck   # 型検査
+npm run audit       # 依存関係の脆弱性監査
+npm run secrets     # gitleaksによる秘密情報の検出
+npm run check       # 上記すべて
+```
+
+- テストファイルごとにマイグレーション済みのテンプレートDBを複製するため、テスト同士は干渉しない
+- 既存のPostgreSQLを使う場合は `TEST_PG_ADMIN_URL`（DB作成権限のある接続先）を指定する
+- WebAuthnはテスト用のソフトウェア認証器（`test/authenticator.ts`）で検証する
+  - OS・ブラウザのPasskey UI、同期Passkey、実機の認証器の挙動はテストの対象外
+  - 実機で確認すべき項目は [SECURITY.md](SECURITY.md) の「実機確認が必要な項目」
+
+## セキュリティ上の注意点
+
+- PoCのため、次の対策がない
+  - レート制限（匿名で大量の登録・Challenge発行・セッション作成ができる）
+  - アカウント復旧手段
+  - 運営者権限と不正利用対応
+  - DB・バックアップの暗号化
+- 本番公開にはTLS、`NODE_ENV=production`、`COOKIE_SECURE=true`、`TRUST_PROXY=true` が必要
+- 実在する顧客情報・契約情報をテストや動作確認に使わない
+- `.env`、`.local/` はGit管理外（`.local/` には開発用DBのパスワードが保存される）
+- 招待リンクには招待トークンが含まれるため、ログやチャットツールの公開チャンネルに貼らない
+- 脅威モデルと残存リスクは [SECURITY.md](SECURITY.md) を参照
+
+## 今後の開発方針
+
+将来構想であり、いずれも未実装
+
+- Phase 2: 案件に紐付く注文・契約、契約主体の管理、案件管理者の正当性確認、データ保持・削除ポリシー
+- Phase 3: Chatwootによる問い合わせ対応（会話原文は複製せず、共有すべき事実だけを案件へ反映）
+- Phase 4: 配送・施工業者への直接情報連携（住所などを自社サーバーに通さない）
+- Phase 5: 案件イベントの集計・分析（個人情報の長期蓄積を前提にしない）
+
+設計上の方針は [ARCHITECTURE.md](ARCHITECTURE.md) の「将来の拡張方針」を参照
+
+## 関連ドキュメント
+
+| ファイル | 内容 |
+| --- | --- |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | システム構成、ER図、認証・認可フロー、信頼境界 |
+| [SECURITY.md](SECURITY.md) | 設計原則、脅威モデル、残存リスク、本番公開前の要件 |
+| [HISTORY.md](HISTORY.md) | 変更履歴、設計判断の理由、未解決事項 |
+| [AGENTS.md](AGENTS.md) | 開発エージェント向けの作業ルール |
