@@ -18,7 +18,7 @@
   },
   "dependencies": {
     "@simplewebauthn/browser": "14.0.0",
-    "@simplewebauthn/server": "14.0.3",
+    "@simplewebauthn/server": "14.1.0",
     "connect-pg-simple": "10.0.0",
     "express": "5.3.0",
     "express-session": "1.19.0",
